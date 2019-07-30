@@ -10,12 +10,10 @@ class MarkDuplicates(OWWidget):
     name = "Mark Duplicates"
     description = "Mark duplicate text parts in corpus"
     icon = "icons/widget2.svg"
-    DATEFIELD = 2
-    TEXTFIELD = 3
-    want_main_area = False
-    phraseFrequencies = {}
-    phraseInitialPos = {}
     N = 20
+    FIELDNAMEDATE = "date"
+    FIELDNAMETEXT = "text"
+    want_main_area = False
 
     class Inputs:
         corpus = Input("Corpus", Corpus)
@@ -25,13 +23,13 @@ class MarkDuplicates(OWWidget):
 
     def resetWidget(self):
         self.corpus = None
-        self.phraseFrequencies = {}
-        self.phraseInitialPos = {}
+        self.phraseRefs = {}
 
     def __init__(self):
         super().__init__()
-        self.corpus = None
         self.label = gui.widgetLabel(self.controlArea)
+        self.progress = gui.ProgressBar(self, 556)
+        self.resetWidget()
     
     def makeRefId(self,date,i):
         return(date+" "+str(i+1))
@@ -39,62 +37,83 @@ class MarkDuplicates(OWWidget):
     def getDateFromRefId(self,refId):
         return(" ".join(refId.split()[0:2]))
     
+    def makePhrase(self,wordList,index):
+        return(" ".join(wordList[index:index+self.N]))
+
+    def addPhraseToRefs(self,phrase,date,index):
+        self.phraseRefs[phrase] = self.makeRefId(date,index)
+
+    def updatePhraseInRefs(self,phrase,date,index):
+        originalDate = self.getDateFromRefId(self.phraseRefs[phrase])
+        if originalDate < date:
+            self.phraseRefs[phrase] = self.makeRefId(date,index)
+
     def countPhrases(self,date,message):
         words = message.split()
         inDuplicate = False
-        duplicateStarts,duplicateEnds,duplicateRefs = [],[],[]
+        duplicateStartRefEnds = []
         for i in range(0,len(words)-self.N):
-            phrase = " ".join(words[i:i+self.N])
-            if phrase in self.phraseFrequencies:
-                self.phraseFrequencies[phrase] += 1
-                originalDate = self.getDateFromRefId(self.phraseInitialPos[phrase])
-                if not inDuplicate:
-                    if originalDate > date:
-                        inDuplicate = True
-                        duplicateStarts.append(i)
-                        duplicateRefs.append(self.phraseInitialPos[phrase])
-                    elif originalDate < date:
-                        self.phraseInitialPos[phrase] = self.makeRefId(date,i)
-            else: 
-                self.phraseFrequencies[phrase] = 1
-                self.phraseInitialPos[phrase] = self.makeRefId(date,i)
+            phrase = self.makePhrase(words,i)
+            if not phrase in self.phraseRefs:
+                self.addPhraseToRefs(phrase,date,i)
                 if inDuplicate:
                     inDuplicate = False
-                    duplicateEnds.append(i+self.N-2)
-        if inDuplicate: duplicateEnds.append(len(words)-1)
-        return(duplicateStarts,duplicateEnds,duplicateRefs)
+                    duplicateStartRefEnds[-1].append(i+self.N)
+            else:
+                self.updatePhraseInRefs(phrase,date,i)
+                originalDate = self.getDateFromRefId(self.phraseRefs[phrase])
+                if not inDuplicate and originalDate > date:
+                    inDuplicate = True
+                    duplicateStartRefEnds.append([i,self.phraseRefs[phrase]])
+        if inDuplicate: duplicateStartRefEnds[-1].append(len(words))
+        return(duplicateStartRefEnds)
 
-    def markDuplicates(self,message,duplicateStarts,duplicateEnds,duplicateRefs):
+    def markDuplicates(self,message,duplicateStartRefEnds):
         words = message.split()
         outText = ""
         wordIndex = 0
-        while len(duplicateStarts) > 0:
-            indexDuplicateStarts = duplicateStarts.pop(0)
-            indexDuplicateEnds = duplicateEnds.pop(0)
-            duplicateRef = duplicateRefs.pop(0)
+        while len(duplicateStartRefEnds) > 0:
+            indexDuplicateStarts,duplicateRef,indexDuplicateEnds = duplicateStartRefEnds.pop(0)
             if indexDuplicateStarts > wordIndex:
                 outText += "<text>"+" ".join(words[wordIndex:indexDuplicateStarts])+"</text>"
             if indexDuplicateStarts < indexDuplicateEnds:
-                outText += '<mark data-markjs="true">'+" ".join(words[indexDuplicateStarts:indexDuplicateEnds+1])+"</mark>"
-            wordIndex = indexDuplicateEnds+1
+                outText += '<mark data-markjs="true">'+" ".join(words[indexDuplicateStarts:indexDuplicateEnds])+"</mark>"
+            wordIndex = indexDuplicateEnds
         if wordIndex < len(words):
             outText += "<text>"+" ".join(words[wordIndex:])+"</text>"
         return(outText)
+
+    def prepareText(self,text):
+        text = re.sub("</*line>"," ",text)
+        text = re.sub(">>+"," ",text)
+        text = " ".join(word_tokenize(text))
+        return(text)
+
+    def getFieldId(self,corpus,fieldName):
+        fieldId = -1
+        for i in range(0,len(corpus.domain.metas)):
+            if str(corpus.domain.metas[i]) == fieldName:
+                fieldId = i
+        return(fieldId)
 
     @Inputs.corpus
     def inputAnalysis(self, corpus):
         self.resetWidget()
         self.corpus = corpus
+        self.progress = OWWidget.progressBarInit(self)
         if self.corpus is None:
             self.label.setText("No corpus available")
         else:
             text = ""
-            for row in self.corpus:
-                date = str(row[self.DATEFIELD])
-                text = str(row.metas[self.TEXTFIELD])
-                text = re.sub("</*line>"," ",text)
-                text = re.sub(">>+"," ",text)
-                text = " ".join(word_tokenize(text))
-                duplicateStarts,duplicateEnds,duplicateRefs = self.countPhrases(date,text)
-                row.metas[self.TEXTFIELD] = self.markDuplicates(text,duplicateStarts,duplicateEnds,duplicateRefs)
+            self.fieldIdDate = self.getFieldId(self.corpus,self.FIELDNAMEDATE)
+            self.fieldIdText = self.getFieldId(self.corpus,self.FIELDNAMETEXT)
+            for i in range(0,len(self.corpus.metas)):
+                date = str(self.corpus.metas[i][self.fieldIdDate])
+                text = self.prepareText(str(self.corpus.metas[i][self.fieldIdText]))
+                duplicateStartRefEnds = self.countPhrases(date,text)
+                self.corpus.metas[i][6] = str(duplicateStartRefEnds)
+                self.corpus.metas[i][self.fieldIdText] = self.markDuplicates(text,duplicateStartRefEnds)
+                # self.label.setText(str(self.corpus.domain.metas)+" "+str(self.corpus.metas[i]))
+                self.label.setText(str(self.fieldIdText)+" "+str(self.fieldIdDate))
+                self.progress = OWWidget.progressBarSet(self,100*i/556)
         self.Outputs.corpus.send(self.corpus)
