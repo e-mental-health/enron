@@ -5,11 +5,12 @@ from Orange.data.domain import filter_visible
 from itertools import chain
 from nltk import word_tokenize
 import re
+import numpy as np
 
 class MarkDuplicates(OWWidget):
     name = "Mark Duplicates"
     description = "Mark duplicate text parts in corpus"
-    icon = "icons/widget2.svg"
+    icon = "icons/MarkDuplicates.svg"
     N = 20
     FIELDNAMEDATE = "date"
     FIELDNAMETEXT = "text"
@@ -28,7 +29,7 @@ class MarkDuplicates(OWWidget):
     def __init__(self):
         super().__init__()
         self.label = gui.widgetLabel(self.controlArea)
-        self.progress = gui.ProgressBar(self, 556)
+        self.progress = gui.ProgressBar(self, 100)
         self.resetWidget()
     
     def makeRefId(self,date,i):
@@ -100,7 +101,8 @@ class MarkDuplicates(OWWidget):
     def inputAnalysis(self, corpus):
         self.resetWidget()
         self.corpus = corpus
-        self.progress = OWWidget.progressBarInit(self)
+        OWWidget.progressBarInit(self)
+        duplicateStartRefEndsArray = []
         if self.corpus is None:
             self.label.setText("No corpus available")
         else:
@@ -111,9 +113,10 @@ class MarkDuplicates(OWWidget):
                 date = str(self.corpus.metas[i][self.fieldIdDate])
                 text = self.prepareText(str(self.corpus.metas[i][self.fieldIdText]))
                 duplicateStartRefEnds = self.countPhrases(date,text)
-                self.corpus.metas[i][6] = str(duplicateStartRefEnds)
+                np.append(self.corpus.metas[i],[str(duplicateStartRefEnds)])
+                duplicateStartRefEndsArray.append([str(duplicateStartRefEnds)])
                 self.corpus.metas[i][self.fieldIdText] = self.markDuplicates(text,duplicateStartRefEnds)
-                # self.label.setText(str(self.corpus.domain.metas)+" "+str(self.corpus.metas[i]))
-                self.label.setText(str(self.fieldIdText)+" "+str(self.fieldIdDate))
-                self.progress = OWWidget.progressBarSet(self,100*i/556)
+                OWWidget.progressBarSet(self,100*(i+1)/len(self.corpus.metas))
+        # np.append(self.corpus.metas,np.array(duplicateStartRefEndsArray),axis=1) 
         self.Outputs.corpus.send(self.corpus)
+        self.label.setText(str(self.corpus.metas[53]))
