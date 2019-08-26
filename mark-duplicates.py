@@ -1,3 +1,9 @@
+#!/usr/bin/env python
+# mark-duplicates.py: mark duplicate text in email text
+# usage: mark-duplicates.py (in orange3 environment)
+# note: assumes input corpus is sorted by date
+# 20190726 erikt(at)xs4all.nl
+
 from Orange.widgets.widget import OWWidget, Input, Output
 from Orange.widgets import gui
 from orangecontrib.text.corpus import Corpus
@@ -5,6 +11,7 @@ from Orange.data.domain import filter_visible
 from itertools import chain
 from nltk import word_tokenize
 import re
+import datetime
 import numpy as np
 
 class MarkDuplicates(OWWidget):
@@ -14,6 +21,8 @@ class MarkDuplicates(OWWidget):
     N = 20
     FIELDNAMEDATE = "date"
     FIELDNAMETEXT = "text"
+    FIELDNAMEEXTRA = "extra"
+    DATEFORMAT = "%Y-%b-%d %H:%M:%S"
     want_main_area = False
 
     class Inputs:
@@ -33,7 +42,7 @@ class MarkDuplicates(OWWidget):
         self.resetWidget()
     
     def makeRefId(self,date,i):
-        return(date+" "+str(i+1))
+        return(date.strftime(self.DATEFORMAT)+" "+str(i+1))
 
     def getDateFromRefId(self,refId):
         return(" ".join(refId.split()[0:2]))
@@ -45,41 +54,45 @@ class MarkDuplicates(OWWidget):
         self.phraseRefs[phrase] = self.makeRefId(date,index)
 
     def updatePhraseInRefs(self,phrase,date,index):
-        originalDate = self.getDateFromRefId(self.phraseRefs[phrase])
+        originalDate = datetime.datetime.strptime(self.getDateFromRefId(self.phraseRefs[phrase]),self.DATEFORMAT)
         if originalDate < date:
             self.phraseRefs[phrase] = self.makeRefId(date,index)
 
     def countPhrases(self,date,message):
         words = message.split()
         inDuplicate = False
-        duplicateStartRefEnds = []
-        for i in range(0,len(words)-self.N):
+        duplicateRefStartEnds = []
+        for i in range(0,len(words)-self.N+1):
             phrase = self.makePhrase(words,i)
             if not phrase in self.phraseRefs:
                 self.addPhraseToRefs(phrase,date,i)
                 if inDuplicate:
                     inDuplicate = False
-                    duplicateStartRefEnds[-1].append(i+self.N)
+                    duplicateEnd = i+self.N
+                    duplicateRefStartEnds[-1].append(duplicateEnd)
             else:
                 self.updatePhraseInRefs(phrase,date,i)
-                originalDate = self.getDateFromRefId(self.phraseRefs[phrase])
-                if not inDuplicate and originalDate > date:
+                if not inDuplicate:
                     inDuplicate = True
-                    duplicateStartRefEnds.append([i,self.phraseRefs[phrase]])
-        if inDuplicate: duplicateStartRefEnds[-1].append(len(words))
-        return(duplicateStartRefEnds)
+                    duplicateSource = self.phraseRefs[phrase]
+                    duplicateStart = i
+                    duplicateRefStartEnds.append([duplicateSource,duplicateStart])
+        if inDuplicate:
+            duplicateEnd = len(words)
+            duplicateRefStartEnds[-1].append(duplicateEnd)
+        return(duplicateRefStartEnds)
 
-    def markDuplicates(self,message,duplicateStartRefEnds):
+    def markDuplicates(self,message,duplicateRefStartEnds):
         words = message.split()
         outText = ""
         wordIndex = 0
-        while len(duplicateStartRefEnds) > 0:
-            indexDuplicateStarts,duplicateRef,indexDuplicateEnds = duplicateStartRefEnds.pop(0)
-            if indexDuplicateStarts > wordIndex:
-                outText += "<text>"+" ".join(words[wordIndex:indexDuplicateStarts])+"</text>"
-            if indexDuplicateStarts < indexDuplicateEnds:
-                outText += '<mark data-markjs="true">'+" ".join(words[indexDuplicateStarts:indexDuplicateEnds])+"</mark>"
-            wordIndex = indexDuplicateEnds
+        while len(duplicateRefStartEnds) > 0:
+            duplicateSource,duplicateStart,duplicateEnd = duplicateRefStartEnds.pop(0)
+            if duplicateStart > wordIndex:
+                outText += "<text>"+" ".join(words[wordIndex:duplicateStart])+"</text>"
+            if duplicateStart < duplicateEnd:
+                outText += '<mark data-markjs="true">'+" ".join(words[duplicateStart:duplicateEnd])+"</mark>"
+            wordIndex = duplicateEnd
         if wordIndex < len(words):
             outText += "<text>"+" ".join(words[wordIndex:])+"</text>"
         return(outText)
@@ -102,21 +115,21 @@ class MarkDuplicates(OWWidget):
         self.resetWidget()
         self.corpus = corpus
         OWWidget.progressBarInit(self)
-        duplicateStartRefEndsArray = []
+        duplicateRefStartEndsArray = []
         if self.corpus is None:
             self.label.setText("No corpus available")
         else:
             text = ""
             self.fieldIdDate = self.getFieldId(self.corpus,self.FIELDNAMEDATE)
             self.fieldIdText = self.getFieldId(self.corpus,self.FIELDNAMETEXT)
+            self.fieldIdExtra = self.getFieldId(self.corpus,self.FIELDNAMEEXTRA)
             for i in range(0,len(self.corpus.metas)):
-                date = str(self.corpus.metas[i][self.fieldIdDate])
+                date = datetime.datetime.fromtimestamp(self.corpus.metas[i][self.fieldIdDate])
                 text = self.prepareText(str(self.corpus.metas[i][self.fieldIdText]))
-                duplicateStartRefEnds = self.countPhrases(date,text)
-                np.append(self.corpus.metas[i],[str(duplicateStartRefEnds)])
-                duplicateStartRefEndsArray.append([str(duplicateStartRefEnds)])
-                self.corpus.metas[i][self.fieldIdText] = self.markDuplicates(text,duplicateStartRefEnds)
+                duplicateRefStartEnds = self.countPhrases(date,text)
+                duplicateRefStartEndsArray.append([list(duplicateRefStartEnds)])
+                self.corpus.metas[i][self.fieldIdExtra] = list(duplicateRefStartEnds)
+                self.corpus.metas[i][self.fieldIdText] = self.markDuplicates(text,duplicateRefStartEnds)
                 OWWidget.progressBarSet(self,100*(i+1)/len(self.corpus.metas))
-        # np.append(self.corpus.metas,np.array(duplicateStartRefEndsArray),axis=1) 
+        # np.append(self.corpus.metas,np.array(duplicateRefStartEndsArray),axis=1) 
         self.Outputs.corpus.send(self.corpus)
-        self.label.setText(str(self.corpus.metas[53]))
