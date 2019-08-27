@@ -52,7 +52,7 @@ def mail2tsv(inFileName,csvwriter,counter):
     for line in inFile:
         line = cleanUpWhiteSpace(line)
         if not inHeading: 
-            textField += "<line>"+line+"</line>"
+            textField += "<line>"+line+"</line> "
         else:
             match = re.search(r"^(From|To|Date|Subject):\s*(.*)$",line)
             if match: key,value = match.group(1),match.group(2)
